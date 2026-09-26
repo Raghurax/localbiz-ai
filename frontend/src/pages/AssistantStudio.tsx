@@ -109,7 +109,13 @@ export const AssistantStudio: React.FC<AssistantStudioProps> = ({ onNavigateToPu
   const [videoManifest, setVideoManifest] = useState<any | null>(null);
   const [generatingVideo, setGeneratingVideo] = useState(false);
 
+  // Active preset execution and section highlight state
+  const [activePresetIndex, setActivePresetIndex] = useState<number | null>(null);
+  const [highlightedCard, setHighlightedCard] = useState<'whatsapp' | 'video' | 'poster' | null>(null);
+
   const campaignResultsRef = useRef<HTMLDivElement>(null);
+  const whatsappCardRef = useRef<HTMLDivElement>(null);
+  const videoReelCardRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
 
   // Low-Literacy Visual Quick Voice Action Buttons with Icons & Trilingual Labels
@@ -158,9 +164,9 @@ export const AssistantStudio: React.FC<AssistantStudioProps> = ({ onNavigateToPu
       subTe: 'ఇన్స్టాగ్రామ్ కోసం 15 సెకన్ల రీల్',
       subEn: 'Viral 15-second visual reel script',
       subHi: 'इंस्टाग्राम के लिए 15 सेकंड वीडियो रील',
-      promptTe: 'Clothing store kosam 15-second viral Instagram Reel script Telugu lo photo and music cues tho create cheyyi.',
-      promptEn: 'Create a 15-second viral Instagram Reel script in English with visual cues and background music cues for our clothing store.',
-      promptHi: 'हमारी कपड़ों की दुकान के लिए विजुअल और म्यूजिक के साथ 15 सेकंड की वायरल इंस्टाग्राम रील स्क्रिप्ट हिंदी में बनाएं।'
+      promptTe: 'Clothing store kosam 15-second viral Instagram Reel script 30% discount offer tho Telugu lo photo and music cues tho create cheyyi.',
+      promptEn: 'Create a 15-second viral Instagram Reel script in English with 30% discount offer, visual cues and background music cues for our clothing store.',
+      promptHi: 'हमारी कपड़ों की दुकान के लिए 30% डिस्काउंट ऑफर के साथ विजुअल और म्यूजिक के साथ 15 सेकंड की वायरल इंस्टाग्राम रील स्क्रिप्ट हिंदी में बनाएं।'
     }
   ];
 
@@ -321,7 +327,12 @@ export const AssistantStudio: React.FC<AssistantStudioProps> = ({ onNavigateToPu
         setTimeout(() => {
           campaignResultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
         }, 200);
+
+        return res.generated_campaign;
+      } else if (res.needs_clarification && res.reply) {
+        setSpeechError(res.reply);
       }
+      return null;
     } catch (err: any) {
       const errGenMap = {
         te: 'ప్రచారం తయారు చేయడంలో దోషం వచ్చింది. మళ్ళీ ట్రై చేయండి.',
@@ -329,8 +340,64 @@ export const AssistantStudio: React.FC<AssistantStudioProps> = ({ onNavigateToPu
         hi: 'कैंपेन बनाने में त्रुटि आई। कृपया पुनः प्रयास करें।'
       };
       setSpeechError(errGenMap[uiLang]);
+      return null;
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Perform specific task when quick action preset buttons below mic are clicked
+  const handlePresetClick = async (presetIdx: number) => {
+    if (loading || generatingVideo) return;
+    setActivePresetIndex(presetIdx);
+    const preset = visualVoicePresets[presetIdx];
+    const selectedPrompt =
+      uiLang === 'te' ? preset.promptTe : uiLang === 'hi' ? preset.promptHi : preset.promptEn;
+    setInputMessage(selectedPrompt);
+
+    try {
+      if (presetIdx === 2) {
+        // Preset 2: WhatsApp Broadcast Blast ("వాట్సాప్ సందేశం పంపండి")
+        let camp = activeCampaign;
+        if (!camp) {
+          camp = await handleSendMessage(selectedPrompt);
+        }
+        if (camp) {
+          const waOutput = camp.outputs.find((o) => o.output_type === 'whatsapp_msg') || camp.outputs[0];
+          setHighlightedCard('whatsapp');
+          setTimeout(() => {
+            whatsappCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }, 300);
+          if (waOutput) {
+            handleShareWhatsApp(waOutput.content);
+          }
+          setTimeout(() => setHighlightedCard(null), 3500);
+        }
+      } else if (presetIdx === 3) {
+        // Preset 3: 15s Instagram Video Reel Script ("వీడియో రీల్ స్క్రిప్ట్")
+        let camp = activeCampaign;
+        if (!camp) {
+          camp = await handleSendMessage(selectedPrompt);
+        }
+        if (camp) {
+          setHighlightedCard('video');
+          setTimeout(() => {
+            videoReelCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }, 300);
+          await handleGenerateVideo(camp);
+          setTimeout(() => setHighlightedCard(null), 3500);
+        }
+      } else {
+        // Preset 0 ("దసరా 30% రాయితీ") & Preset 1 ("నూతన కలెక్షన్ పండుగ ఆఫర్")
+        const camp = await handleSendMessage(selectedPrompt);
+        if (camp) {
+          setTimeout(() => {
+            campaignResultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }, 300);
+        }
+      }
+    } finally {
+      setActivePresetIndex(null);
     }
   };
 
@@ -687,29 +754,32 @@ export const AssistantStudio: React.FC<AssistantStudioProps> = ({ onNavigateToPu
     }
   };
 
-  const handleGenerateVideo = async () => {
+  const handleGenerateVideo = async (targetCampaign?: Campaign) => {
     const currentBiz = await getOrFetchBusiness();
-    const bizId = currentBiz?.id || activeCampaign?.business_id;
-    if (!activeCampaign || !bizId) return;
+    const camp = targetCampaign || activeCampaign;
+    const bizId = currentBiz?.id || camp?.business_id;
+    if (!camp || !bizId) return false;
     setGeneratingVideo(true);
     try {
-      const reelScript = activeCampaign.outputs.find((o) => o.output_type === 'reel_script')?.content || 'Festive Promo';
+      const reelScript = camp.outputs.find((o) => o.output_type === 'reel_script')?.content || 'Festive Promo';
       const res = await apiFetch('/media/generate-video', {
         method: 'POST',
         body: JSON.stringify({
           business_id: bizId,
-          campaign_id: activeCampaign.id,
+          campaign_id: camp.id,
           script_text: reelScript,
-          headline: activeCampaign.campaign_type || 'Dasara Sale',
-          offer_text: activeCampaign.offer || '30% OFF',
+          headline: camp.campaign_type || 'Dasara Sale',
+          offer_text: camp.offer || '30% OFF',
           cta_text: 'Visit Store',
           theme: 'festive_vibrant'
         })
       });
       setVideoManifest(res.video_manifest);
-      toast('Video reel storyboard generated', 'success');
+      toast('Video reel storyboard generated!', 'success');
+      return true;
     } catch (err: any) {
       toast('Reel error: ' + err.message, 'error');
+      return false;
     } finally {
       setGeneratingVideo(false);
     }
@@ -845,32 +915,57 @@ export const AssistantStudio: React.FC<AssistantStudioProps> = ({ onNavigateToPu
         </p>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          {visualVoicePresets.map((preset, idx) => (
-            <Card
-              key={idx}
-              hover
-              onClick={() => {
-                const selectedPrompt =
-                  uiLang === 'te' ? preset.promptTe : uiLang === 'hi' ? preset.promptHi : preset.promptEn;
-                setInputMessage(selectedPrompt);
-                handleSendMessage(selectedPrompt);
-              }}
-              className="p-4 flex items-center gap-3.5 cursor-pointer text-left"
-            >
-              <div className="w-11 h-11 rounded-lg bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-xl shrink-0">
-                {preset.emoji}
-              </div>
-              <div className="min-w-0 flex-1">
-                <h3 className="font-semibold text-xs text-slate-900 dark:text-slate-100 truncate">
-                  {uiLang === 'te' ? preset.labelTe : uiLang === 'hi' ? preset.labelHi : preset.labelEn}
-                </h3>
-                <p className="text-[11px] text-slate-400 truncate mt-0.5">
-                  {uiLang === 'te' ? preset.subTe : uiLang === 'hi' ? preset.subHi : preset.subEn}
-                </p>
-              </div>
-              <Wand2 className="w-4 h-4 text-slate-400 shrink-0" />
-            </Card>
-          ))}
+          {visualVoicePresets.map((preset, idx) => {
+            const isThisPresetActive = activePresetIndex === idx && (loading || generatingVideo);
+            const isWhatsApp = idx === 2;
+            const isReel = idx === 3;
+            return (
+              <button
+                key={idx}
+                type="button"
+                disabled={loading || generatingVideo}
+                onClick={() => handlePresetClick(idx)}
+                className={`w-full p-4 rounded-xl border text-left transition-all duration-200 flex items-center gap-3.5 group relative cursor-pointer disabled:opacity-75 disabled:cursor-not-allowed ${
+                  isThisPresetActive
+                    ? 'border-primary-500 bg-primary-50/70 dark:bg-primary-950/40 ring-2 ring-primary-500/30 shadow-md'
+                    : 'bg-[--color-surface] border-[--color-border] hover:border-primary-400 dark:hover:border-primary-500 hover:shadow-md active:scale-[0.98]'
+                }`}
+              >
+                <div className={`w-11 h-11 rounded-lg flex items-center justify-center text-xl shrink-0 transition-transform group-hover:scale-110 ${
+                  isThisPresetActive
+                    ? 'bg-primary-100 dark:bg-primary-900/50'
+                    : 'bg-slate-100 dark:bg-slate-800'
+                }`}>
+                  {preset.emoji}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-semibold text-xs text-slate-900 dark:text-slate-100 truncate group-hover:text-primary-600 dark:group-hover:text-primary-400 transition-colors">
+                      {uiLang === 'te' ? preset.labelTe : uiLang === 'hi' ? preset.labelHi : preset.labelEn}
+                    </h3>
+                    {isWhatsApp && activeCampaign && (
+                      <span className="text-[10px] px-1.5 py-0.5 bg-green-100 dark:bg-green-950/60 text-green-700 dark:text-green-400 rounded-full font-medium shrink-0">
+                        {uiLang === 'te' ? '1-క్లిక్ సెండ్' : uiLang === 'hi' ? '1-क्लिक भेजें' : '1-Click Send'}
+                      </span>
+                    )}
+                    {isReel && activeCampaign && (
+                      <span className="text-[10px] px-1.5 py-0.5 bg-purple-100 dark:bg-purple-950/60 text-purple-700 dark:text-purple-400 rounded-full font-medium shrink-0">
+                        {uiLang === 'te' ? 'రీల్ చేయండి' : uiLang === 'hi' ? 'रील बनाएं' : 'Make Reel'}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-slate-400 truncate mt-0.5">
+                    {uiLang === 'te' ? preset.subTe : uiLang === 'hi' ? preset.subHi : preset.subEn}
+                  </p>
+                </div>
+                {isThisPresetActive ? (
+                  <div className="w-4 h-4 rounded-full border-2 border-primary-600 border-t-transparent animate-spin shrink-0" />
+                ) : (
+                  <Wand2 className="w-4 h-4 text-slate-400 group-hover:text-primary-500 group-hover:rotate-12 transition-all shrink-0" />
+                )}
+              </button>
+            );
+          })}
         </div>
       </div>
 
@@ -983,8 +1078,20 @@ export const AssistantStudio: React.FC<AssistantStudioProps> = ({ onNavigateToPu
 
           {/* Cards for Instagram, WhatsApp, Reel with ATTACHED Poster Image */}
           <div className="space-y-5">
-            {activeCampaign.outputs.map((out) => (
-              <Card key={out.id} className="p-6 space-y-4">
+            {activeCampaign.outputs.map((out) => {
+              const isWhatsAppCard = out.output_type === 'whatsapp_msg';
+              const isHighlighted = isWhatsAppCard && highlightedCard === 'whatsapp';
+              return (
+                <div
+                  key={out.id}
+                  ref={isWhatsAppCard ? whatsappCardRef : undefined}
+                  className="scroll-mt-8"
+                >
+                  <Card className={`p-6 space-y-4 transition-all duration-300 ${
+                    isHighlighted
+                      ? 'ring-2 ring-green-500 bg-green-50/30 dark:bg-green-950/30 shadow-lg'
+                      : ''
+                  }`}>
                 <div className="flex items-center justify-between pb-3 border-b border-[--color-border]">
                   <div className="flex items-center gap-2">
                     <FileText className="w-4 h-4 text-primary-600" />
@@ -1064,7 +1171,9 @@ export const AssistantStudio: React.FC<AssistantStudioProps> = ({ onNavigateToPu
                   </div>
                 </div>
               </Card>
-            ))}
+            </div>
+          );
+        })}
           </div>
 
           {/* ═══════════════════════════════════════════════════════════ */}
@@ -1389,38 +1498,44 @@ export const AssistantStudio: React.FC<AssistantStudioProps> = ({ onNavigateToPu
           </Card>
 
           {/* 15s Video Reel Storyboard Card */}
-          <Card className="p-5 space-y-4">
-            <div className="flex items-center gap-2 text-slate-800 dark:text-slate-200 font-semibold text-xs">
-              <Film className="w-4 h-4 text-primary-600" />
-              <span>15s Video Reel Storyboard</span>
-            </div>
-
-            {videoManifest ? (
-              <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-800/40 text-xs border border-[--color-border] space-y-1.5">
-                <p className="font-semibold text-slate-700 dark:text-slate-300">
-                  Format: {videoManifest.format} · {videoManifest.total_duration_seconds}s
-                </p>
-                <p className="text-slate-500 dark:text-slate-400 line-clamp-2">
-                  Voiceover: {videoManifest.voiceover}
-                </p>
+          <div ref={videoReelCardRef} className="scroll-mt-8">
+            <Card className={`p-5 space-y-4 transition-all duration-300 ${
+              highlightedCard === 'video'
+                ? 'ring-2 ring-purple-500 bg-purple-50/30 dark:bg-purple-950/30 shadow-lg'
+                : ''
+            }`}>
+              <div className="flex items-center gap-2 text-slate-800 dark:text-slate-200 font-semibold text-xs">
+                <Film className="w-4 h-4 text-primary-600" />
+                <span>15s Video Reel Storyboard</span>
               </div>
-            ) : (
-              <p className="text-xs text-slate-400">
-                Generate timed audio/visual cue storyboard for Instagram Reels.
-              </p>
-            )}
 
-            <Button
-              variant="secondary"
-              size="sm"
-              loading={generatingVideo}
-              onClick={handleGenerateVideo}
-              className="w-full"
-              icon={<Wand2 className="w-3.5 h-3.5" />}
-            >
-              {generatingVideo ? 'Building...' : 'Generate Reel Script'}
-            </Button>
-          </Card>
+              {videoManifest ? (
+                <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-800/40 text-xs border border-[--color-border] space-y-1.5">
+                  <p className="font-semibold text-slate-700 dark:text-slate-300">
+                    Format: {videoManifest.format} · {videoManifest.total_duration_seconds}s
+                  </p>
+                  <p className="text-slate-500 dark:text-slate-400 line-clamp-2">
+                    Voiceover: {videoManifest.voiceover}
+                  </p>
+                </div>
+              ) : (
+                <p className="text-xs text-slate-400">
+                  Generate timed audio/visual cue storyboard for Instagram Reels.
+                </p>
+              )}
+
+              <Button
+                variant="secondary"
+                size="sm"
+                loading={generatingVideo}
+                onClick={() => handleGenerateVideo()}
+                className="w-full"
+                icon={<Wand2 className="w-3.5 h-3.5" />}
+              >
+                {generatingVideo ? 'Building...' : 'Generate Reel Script'}
+              </Button>
+            </Card>
+          </div>
         </div>
       )}
 

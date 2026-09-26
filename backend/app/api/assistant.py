@@ -38,20 +38,31 @@ def chat_with_assistant(
     offer_val = spec.get("offer", "")
     # Only ask for clarification if offer is still generic AND no recognizable offer pattern found
     offer_is_generic = offer_val in ("Special Discount", "", None)
+    msg_lower = request.message.lower()
     has_no_offer_signal = (
-        "sale" not in request.message.lower()
+        "sale" not in msg_lower
         and "%" not in request.message
-        and "free" not in request.message.lower()
+        and "free" not in msg_lower
         and "ఉచిత" not in request.message
-        and "discount" not in request.message.lower()
-        and "off" not in request.message.lower()
-        and "bogo" not in request.message.lower()
-        and "buy" not in request.message.lower()
+        and "discount" not in msg_lower
+        and "off" not in msg_lower
+        and "bogo" not in msg_lower
+        and "buy" not in msg_lower
         and "రాయితీ" not in request.message
         and "తగ్గింపు" not in request.message
         and "ఆఫర్" not in request.message
+        and "reel" not in msg_lower
+        and "రీల్" not in request.message
+        and "script" not in msg_lower
+        and "whatsapp" not in msg_lower
+        and "వాట్సాప్" not in request.message
+        and "campaign" not in msg_lower
+        and "ప్రచారం" not in request.message
         and not spec.get("understood_intent")  # Gemini NLU understood something
     )
+    if offer_is_generic and not has_no_offer_signal and not spec.get("offer"):
+        spec["offer"] = "Special Festive Offer"
+
     if offer_is_generic and has_no_offer_signal:
         missing_fields.append("discount or promotional offer (e.g. 30% OFF, Buy 1 Get 1 Free)")
 
